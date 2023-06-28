@@ -20,7 +20,6 @@ guess_number = $08 ; 1 byte
 choice = $09 ; 1 byte
 delay = $0A ; 1 byte
 mode = $0B ; 1 byte
-
 tmp = $0C ; 1 byte
 
 value = $0200 ; 2 bytes
@@ -39,6 +38,7 @@ reset:
     sta DDRB
     lda #%11100001 ; Set top 3 pins on port A to output and the last for led
     sta DDRA
+    jsr init_timer
 
     lda #%00111000 ; Set 8-bit mode; 2-line display; 5x8 font
     jsr lcd_instruction
@@ -47,7 +47,7 @@ reset:
     lda #%00000110 ; Increment and shift cursor; don't shift display
     jsr lcd_instruction
     jsr clear_lcd
-    
+
     lda #0 
     sta PORTA
     sta lcd_toggle_time
@@ -62,12 +62,12 @@ reset:
     sta ptr + 1
     jsr cpy_string
     jsr print
-    jsr init_timer
 
 loop_start:
     lda PORTA
     and #%00010000
     beq loop_start
+
     lda ticks
     sta guess_number
     lda #<message_select
@@ -84,87 +84,14 @@ loop_start:
 
 loop:
     jsr update_buttom
+    lda tmp
+    bne loop
     lda choice
     sta value
     lda #0
     sta value + 1
-    jsr update_lcd_number
+    jmp update_lcd_number
     jmp loop
-
-update_buttom:
-    sec 
-    lda ticks
-    sbc buttom_toggle_time
-    cmp #13  ; 13ms
-    bcc exit_update_buttom
-    lda ticks
-    sta buttom_toggle_time
-    lda PORTA
-    and #%00001110
-    cmp #%00000010
-    beq right
-    cmp #%00001000
-    beq left
-    cmp #%00000100
-    beq select
-    jmp loop
-right:
-    inc choice
-    rts
-left:
-    dec choice
-    rts
-select:
-    lda choice
-    cmp guess_number
-    beq equal
-    cmp guess_number
-    bcc increase
-    jmp decrease
-equal:
-    lda #<message_equal
-    sta ptr
-    lda #>message_equal
-    sta ptr + 1
-    jsr cpy_string
-    jsr print
-    jsr infinity_loop
-increase:
-    lda #<message_increase
-    sta ptr
-    lda #>message_increase
-    sta ptr + 1
-    jsr cpy_string
-    jsr print
-    lda #100
-    sta delay
-    jsr delay_f
-    rts
-decrease:
-    lda #<message_decrease
-    sta ptr
-    lda #>message_decrease
-    sta ptr + 1
-    jsr cpy_string
-    jsr print
-    lda #100
-    sta delay
-    jsr delay_f
-    rts
-exit_update_buttom:
-    rts
-
-update_lcd_number:
-    sec 
-    lda ticks
-    sbc lcd_toggle_time
-    cmp #25  ; 25ms
-    bcc exit_update_lcd
-    jsr print_number
-    lda ticks
-    sta lcd_toggle_time
-exit_update_lcd:
-    rts
 
 init_timer:
     lda #0
@@ -183,35 +110,101 @@ init_timer:
     cli
     rts
 
-irq:
-    pha
-    bit T1CL
-    inc ticks
-    bne end_irq
-    inc ticks + 1
-    bne end_irq
-    inc ticks + 2
-    bne end_irq
-    inc ticks + 3
-end_irq:
-    pla
-    rti
+update_lcd_number:
+    sec 
+    lda ticks
+    sbc lcd_toggle_time
+    cmp #20  ; 20ms
+    bcc exit_update_lcd
+    jsr print_number
+    lda ticks
+    sta lcd_toggle_time
+exit_update_lcd:
+    jmp loop
+
+update_buttom:
+    lda #0
+    sta tmp
+    sec 
+    lda ticks
+    sbc buttom_toggle_time
+    cmp #13  ; 13ms
+    bcc exit_update_buttom
+    lda ticks
+    sta buttom_toggle_time
+    lda PORTA
+    and #%00001110
+    cmp #%00000010
+    beq right
+    cmp #%00001000
+    beq left
+    cmp #%00000100
+    beq select
+    lda #1
+    sta tmp
+    rts
+right:
+    inc choice
+    rts
+left:
+    dec choice
+    rts
+select:
+    lda choice
+    cmp guess_number
+    beq equal
+    cmp guess_number
+    bcc increase
+decrease:
+    lda #<message_decrease
+    sta ptr
+    lda #>message_decrease
+    sta ptr + 1
+    jmp exit_update_buttom2
+equal:
+    lda #<message_equal
+    sta ptr
+    lda #>message_equal
+    sta ptr + 1
+    jsr cpy_string
+    jsr print
+    jmp infinity_loop
+increase:
+    lda #<message_increase
+    sta ptr
+    lda #>message_increase
+    sta ptr + 1
+exit_update_buttom2:
+    jsr cpy_string
+    jsr print
+    lda #100
+    sta delay
+    jsr delay_f
+exit_update_buttom:
+    rts
+
+cpy_string:  ; the address of the string is in ptr
+    ldy #0
+loop_cpy:
+    lda (ptr),y
+    beq end_cpy
+    sta message,y
+    iny
+    jmp loop_cpy
+end_cpy:
+    lda #0
+    sta message,y ; add null terminator
+    rts
 
 print_number: ; for 2 bits number
     lda #0 
     sta message
-    sta message + 1
-    sta message + 2
-    sta message + 3
-    sta message + 4
-    sta message + 5
 divide:
     ; Initialize the remainder to zero
     lda #0
     sta mod10
     sta mod10 + 1
     clc
-
     ldx #16
 
 divloop:
@@ -242,7 +235,7 @@ ignore_result:
     adc #"0"
     pha
     inc message
-    ; if value != 0, then continue dividing
+
     lda value
     ora value + 1
     bne divide ; branch if value not equal to 0
@@ -255,6 +248,8 @@ divloop2:
     iny
     dex
     bne divloop2 
+    txa
+    sta message,y
 
 print:
     jsr clear_lcd
@@ -264,13 +259,23 @@ loop_print:
     beq end_print
     jsr print_char
     inx
-    txa
-    cmp #16
+    cpx #16
     bne loop_print
     lda #%11000000 ; Set cursor to second line
     jsr lcd_instruction
     jmp loop_print
 end_print:
+    rts
+
+print_char:
+    jsr lcd_wait
+    sta PORTB
+    lda #RS         ; Set RS; Clear RW/E bits
+    sta PORTA
+    lda #(RS | E)   ; Set E bit to send instruction
+    sta PORTA
+    lda #RS         ; Clear E bits
+    sta PORTA
     rts
 
 clear_lcd:
@@ -285,11 +290,6 @@ lcd_wait:
     lda #%00000000  ; Port B is input
     sta DDRB
 lcdbusy:
-    lda mode
-    cmp #1
-    bne not_buttom
-    jsr update_buttom
-not_buttom: 
     lda #RW
     sta PORTA
     lda #(RW | E)
@@ -316,19 +316,6 @@ lcd_instruction:
     sta PORTA
     rts
 
-cpy_string:  ; the address of the string is in ptr
-    ldy #0
-loop_cpy:
-    lda (ptr),y
-    beq end_cpy
-    sta message,y
-    iny
-    jmp loop_cpy
-end_cpy:
-    lda #0
-    sta message,y ; add null terminator
-    rts
-
 delay_f:
     lda ticks
     adc delay
@@ -339,21 +326,24 @@ delay_loop:
     bne delay_loop
     rts
 
-print_char:
-  jsr lcd_wait
-  sta PORTB
-  lda #RS         ; Set RS; Clear RW/E bits
-  sta PORTA
-  lda #(RS | E)   ; Set E bit to send instruction
-  sta PORTA
-  lda #RS         ; Clear E bits
-  sta PORTA
-  rts
-
 infinity_loop:
     lda #1 
     sta PORTA
     jmp infinity_loop
+
+irq:
+    pha
+    bit T1CL
+    inc ticks
+    bne end_irq
+    inc ticks + 1
+    bne end_irq
+    inc ticks + 2
+    bne end_irq
+    inc ticks + 3
+end_irq:
+    pla
+    rti
 
   .org $fffc
   .word reset
